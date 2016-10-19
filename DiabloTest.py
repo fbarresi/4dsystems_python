@@ -20,21 +20,85 @@ along with this program.  If not, see <http://www.gnu.org/licenses/>.
 '''
 
 import sys
+import paho.mqtt.client as mqtt
 from DiabloSerial import DiabloSerial
 from DiabloConstants import *
+
+# ------------------------------------------------------------------------------
+# CONFIGURATION
+# ------------------------------------------------------------------------------
+
+MQTT_BROKER = '192.168.1.10'
+MQTT_PORT = 1883
+MQTT_TOPIC = '/home/studio/lamp'
+
+# ------------------------------------------------------------------------------
+
+buttonState = BUTTON_UP
+
+def on_connect(client, userdata, flags, rc):
+    print("Connected to broker at %s" % MQTT_BROKER)
+    client.subscribe(MQTT_TOPIC)
+
+def on_message(client, userdata, msg):
+    global buttonState
+    if msg.topic == MQTT_TOPIC:
+        '''
+        I'm checking both conditions since I have a third option at home
+        If payload[0] == '2' it means toggle
+        '''
+        if msg.payload[0] == '1':
+            buttonState = BUTTON_DOWN
+        if msg.payload[0] == '0':
+            buttonState = BUTTON_UP
+        show_button_state()
 
 def callback(errcode, errbyte):
     print "ERROR: ", errcode, errbyte
     sys.exit(1)
 
+def show_button_state():
+    global buttonState
+    diablo.gfx_Button(buttonState, 20, 40, GRAY if buttonState == BUTTON_UP else RED, WHITE, FONT3, 3, 3, "Press Me")
+    diablo.txt_Width(2);
+    diablo.txt_Height(2);
+    diablo.gfx_MoveTo(50,120);
+    diablo.putstr("Light %s" % ("OFF" if buttonState == BUTTON_UP else "ON "));
+
+def send_state():
+    global buttonState
+    client.publish(MQTT_TOPIC, "1" if buttonState == BUTTON_DOWN else "0")
+
 if __name__ == "__main__":
-    diablo = DiabloSerial(2000, True, callback)
-    if diablo:
-        diablo.OpenComm('/dev/ttyUSB0', 9600)
-        print "Model:", diablo.sys_GetModel()
-        print "Version:", diablo.sys_GetVersion()
-        diablo.gfx_Cls()
-        diablo.putstr("HELLO WORLD")
-        diablo.gfx_Button(1, 20, 40, GRAY, WHITE, FONT3, 3, 3, "Press Me")
-        diablo.gfx_Circle(60, 160, 10, GRAY)
-        diablo.gfx_Polyline(4, [140, 140, 150, 160], [10, 20, 10, 30], GRAY)
+
+    # Initialize display
+    diablo = DiabloSerial(500, True, callback)
+    diablo.OpenComm('/dev/ttyUSB0', 9600)
+    diablo.touch_Set(TOUCH_ENABLE)
+    diablo.gfx_Cls()
+    print "Model:", diablo.sys_GetModel()
+    print "Version:", diablo.sys_GetVersion()
+    show_button_state()
+
+    # Initialize MQTT connection
+    client = mqtt.Client()
+    client.on_connect = on_connect
+    client.on_message = on_message
+    client.connect(MQTT_BROKER, MQTT_PORT, 60)
+
+    x = y = 0
+
+    while True:
+
+        client.loop(timeout=0.1)
+        state = diablo.touch_Get(TOUCH_STATUS)
+
+        if ((state == TOUCH_PRESSED) or (state == TOUCH_MOVING)):
+            x = diablo.touch_Get(TOUCH_GETX)
+            y = diablo.touch_Get(TOUCH_GETY)
+
+        if (state == TOUCH_RELEASED):
+            if ((x>=20) and (x<=220) and (y>=40) and (y<=100)):
+                buttonState = not buttonState
+                show_button_state()
+                send_state()
